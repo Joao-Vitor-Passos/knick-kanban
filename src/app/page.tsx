@@ -1,65 +1,212 @@
-import Image from "next/image";
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+import { DragDropContext, DropResult } from "@hello-pangea/dnd";
+import { LayoutDashboard } from "lucide-react";
+import { BoardState, Task, initialData } from "@/types/kanban";
+import KanbanColumn from "@/components/KanbanColumn";
+
+const STORAGE_KEY = "kanban-board-state";
+
+function loadBoard(): BoardState {
+  try {
+    const serialized = localStorage.getItem(STORAGE_KEY);
+    if (!serialized) return initialData;
+    return JSON.parse(serialized) as BoardState;
+  } catch {
+    return initialData;
+  }
+}
+
+function saveBoard(board: BoardState): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(board));
+  } catch {
+    console.warn("[Kanban] Não foi possível salvar no localStorage.");
+  }
+}
 
 export default function Home() {
+  const [board, setBoard] = useState<BoardState | null>(null);
+
+  // Carrega do localStorage apenas no cliente (evita hydration error)
+  useEffect(() => {
+    setBoard(loadBoard());
+  }, []);
+
+  // Persiste toda vez que o board muda
+  useEffect(() => {
+    if (board !== null) saveBoard(board);
+  }, [board]);
+
+  const onDragEnd = useCallback(
+    (result: DropResult) => {
+      if (!board) return;
+      const { destination, source, draggableId } = result;
+
+      if (!destination) return;
+      if (
+        destination.droppableId === source.droppableId &&
+        destination.index === source.index
+      ) return;
+
+      const sourceColumn = board.columns[source.droppableId];
+      const destColumn = board.columns[destination.droppableId];
+
+      // Mesma coluna
+      if (sourceColumn.id === destColumn.id) {
+        const newTaskIds = Array.from(sourceColumn.taskIds);
+        newTaskIds.splice(source.index, 1);
+        newTaskIds.splice(destination.index, 0, draggableId);
+        setBoard({
+          ...board,
+          columns: {
+            ...board.columns,
+            [sourceColumn.id]: { ...sourceColumn, taskIds: newTaskIds },
+          },
+        });
+        return;
+      }
+
+      // Entre colunas diferentes
+      const sourceTaskIds = Array.from(sourceColumn.taskIds);
+      sourceTaskIds.splice(source.index, 1);
+      const destTaskIds = Array.from(destColumn.taskIds);
+      destTaskIds.splice(destination.index, 0, draggableId);
+
+      setBoard({
+        ...board,
+        columns: {
+          ...board.columns,
+          [sourceColumn.id]: { ...sourceColumn, taskIds: sourceTaskIds },
+          [destColumn.id]: { ...destColumn, taskIds: destTaskIds },
+        },
+      });
+    },
+    [board]
+  );
+
+  const addTask = useCallback(
+    (columnId: string, title: string, description: string) => {
+      if (!board) return;
+      const newTask: Task = {
+        id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        title,
+        description,
+        createdAt: new Date().toISOString(),
+      };
+      const targetColumn = board.columns[columnId];
+      setBoard({
+        ...board,
+        tasks: { ...board.tasks, [newTask.id]: newTask },
+        columns: {
+          ...board.columns,
+          [columnId]: {
+            ...targetColumn,
+            taskIds: [newTask.id, ...targetColumn.taskIds],
+          },
+        },
+      });
+    },
+    [board]
+  );
+
+  const deleteTask = useCallback(
+    (columnId: string, taskId: string) => {
+      if (!board) return;
+      const { [taskId]: _removed, ...remainingTasks } = board.tasks;
+      const targetColumn = board.columns[columnId];
+      setBoard({
+        ...board,
+        tasks: remainingTasks,
+        columns: {
+          ...board.columns,
+          [columnId]: {
+            ...targetColumn,
+            taskIds: targetColumn.taskIds.filter((id) => id !== taskId),
+          },
+        },
+      });
+    },
+    [board]
+  );
+
+  // Skeleton enquanto hidrata
+  if (board === null) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-neutral-950">
+        <div className="flex items-center gap-3 text-neutral-500">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-700 border-t-amber-500" />
+          <span className="text-sm font-medium">Carregando tabuleiro...</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="flex min-h-screen flex-col bg-neutral-950">
+      {/* Header */}
+      <header className="sticky top-0 z-10 border-b border-neutral-800 bg-neutral-950/80 backdrop-blur-sm">
+        <div className="mx-auto flex max-w-screen-2xl items-center justify-between px-6 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500">
+              <LayoutDashboard size={16} className="text-neutral-950" />
+            </div>
+            <div>
+              <h1 className="text-base font-bold tracking-tight text-neutral-100">
+                KanbanLocal
+              </h1>
+              <p className="text-xs text-neutral-500">
+                Dados salvos localmente no navegador
+              </p>
+            </div>
+          </div>
+          <div className="hidden sm:flex items-center gap-6 text-xs text-neutral-500">
+            <span>
+              <span className="font-bold text-neutral-300">
+                {Object.keys(board.tasks).length}
+              </span>{" "}
+              tarefas
+            </span>
+            <span>
+              <span className="font-bold text-neutral-300">
+                {board.columnOrder.length}
+              </span>{" "}
+              colunas
+            </span>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+      </header>
+
+      {/* Board */}
+      <main className="flex-1 overflow-x-auto px-6 py-6">
+        <DragDropContext onDragEnd={onDragEnd}>
+          <div className="flex gap-4 items-start">
+            {board.columnOrder.map((columnId) => {
+              const column = board.columns[columnId];
+              const tasks = column.taskIds
+                .map((id) => board.tasks[id])
+                .filter((t): t is Task => t !== undefined);
+              return (
+                <KanbanColumn
+                  key={column.id}
+                  column={column}
+                  tasks={tasks}
+                  onAddTask={addTask}
+                  onDeleteTask={deleteTask}
+                />
+              );
+            })}
+          </div>
+        </DragDropContext>
       </main>
+
+      {/* Footer */}
+      <footer className="border-t border-neutral-800 px-6 py-3">
+        <p className="text-center text-xs text-neutral-700">
+          Arraste os cards entre colunas · Hover para excluir · Dados persistidos no localStorage
+        </p>
+      </footer>
     </div>
   );
 }
