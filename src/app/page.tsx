@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { DragDropContext, DropResult } from "@hello-pangea/dnd";
 import { LayoutDashboard } from "lucide-react";
 import { BoardState, Task, initialData } from "@/types/kanban";
@@ -12,8 +12,10 @@ function loadBoard(): BoardState {
   try {
     const serialized = localStorage.getItem(STORAGE_KEY);
     if (!serialized) return initialData;
-    return JSON.parse(serialized) as BoardState;
-  } catch {
+    const parsed = JSON.parse(serialized);
+    return parsed && typeof parsed === "object" ? (parsed as BoardState) : initialData;
+  } catch (error) {
+    console.warn("[Kanban] Erro ao carregar do localStorage:", error);
     return initialData;
   }
 }
@@ -21,23 +23,35 @@ function loadBoard(): BoardState {
 function saveBoard(board: BoardState): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(board));
-  } catch {
-    console.warn("[Kanban] Não foi possível salvar no localStorage.");
+  } catch (error) {
+    console.warn("[Kanban] Não foi possível salvar no localStorage:", error);
   }
 }
 
-export default function Home() {
-  const [board, setBoard] = useState<BoardState | null>(null);
+function useLocalBoard(): [BoardState, (board: BoardState) => void] {
+  const [board, setBoard] = useState<BoardState>(() => {
+    if (typeof window === "undefined") return initialData;
+    return loadBoard();
+  });
+  const hasInitialized = useRef(false);
 
-  // Carrega do localStorage apenas no cliente (evita hydration error)
   useEffect(() => {
-    setBoard(loadBoard());
+    if (!hasInitialized.current) {
+      hasInitialized.current = true;
+    }
   }, []);
 
-  // Persiste toda vez que o board muda
   useEffect(() => {
-    if (board !== null) saveBoard(board);
+    if (hasInitialized.current) {
+      saveBoard(board);
+    }
   }, [board]);
+
+  return [board, setBoard];
+}
+
+export default function Home() {
+  const [board, setBoard] = useLocalBoard();
 
   const onDragEnd = useCallback(
     (result: DropResult) => {
@@ -83,7 +97,7 @@ export default function Home() {
         },
       });
     },
-    [board]
+    [board, setBoard]
   );
 
   const addTask = useCallback(
@@ -108,13 +122,15 @@ export default function Home() {
         },
       });
     },
-    [board]
+    [board, setBoard]
   );
 
   const deleteTask = useCallback(
     (columnId: string, taskId: string) => {
       if (!board) return;
-      const { [taskId]: _removed, ...remainingTasks } = board.tasks;
+      const remainingTasks = Object.fromEntries(
+        Object.entries(board.tasks).filter(([id]) => id !== taskId)
+      );
       const targetColumn = board.columns[columnId];
       setBoard({
         ...board,
@@ -128,20 +144,8 @@ export default function Home() {
         },
       });
     },
-    [board]
+    [board, setBoard]
   );
-
-  // Skeleton enquanto hidrata
-  if (board === null) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-neutral-950">
-        <div className="flex items-center gap-3 text-neutral-500">
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-700 border-t-amber-500" />
-          <span className="text-sm font-medium">Carregando tabuleiro...</span>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="flex min-h-screen flex-col bg-neutral-950">
