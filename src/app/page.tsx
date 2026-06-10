@@ -1,216 +1,203 @@
-"use client";
+'use client';
 
-import { useState, useEffect, useCallback, useRef } from "react";
-import { DragDropContext, DropResult } from "@hello-pangea/dnd";
-import { LayoutDashboard } from "lucide-react";
-import { BoardState, Task, initialData } from "@/types/kanban";
-import KanbanColumn from "@/components/KanbanColumn";
+import { useState, useEffect, useCallback } from 'react';
+import { DragDropContext, DropResult } from '@hello-pangea/dnd';
+import { BoardState, Dashboard, initialBoardData, Task } from '@/types/kanban';
+import KanbanColumn from '@/components/KanbanColumn';
+import Auth from '@/components/Auth';
+import { supabase } from '@/lib/supabase';
+import { LogOut, FolderKanban, Plus } from 'lucide-react';
+import { Session } from '@supabase/supabase-js';
 
-const STORAGE_KEY = "kanban-board-state";
-
-function loadBoard(): BoardState {
-  try {
-    const serialized = localStorage.getItem(STORAGE_KEY);
-    if (!serialized) return initialData;
-    const parsed = JSON.parse(serialized);
-    return parsed && typeof parsed === "object" ? (parsed as BoardState) : initialData;
-  } catch (error) {
-    console.warn("[Kanban] Erro ao carregar do localStorage:", error);
-    return initialData;
-  }
-}
-
-function saveBoard(board: BoardState): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(board));
-  } catch (error) {
-    console.warn("[Kanban] Não foi possível salvar no localStorage:", error);
-  }
-}
-
-function useLocalBoard(): [BoardState, (board: BoardState) => void] {
-  const [board, setBoard] = useState<BoardState>(() => {
-    if (typeof window === "undefined") return initialData;
-    return loadBoard();
-  });
-  const hasInitialized = useRef(false);
+export default function Home() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [dashboards, setDashboards] = useState<Dashboard[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string>('');
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [newTabName, setNewTabName] = useState('');
 
   useEffect(() => {
-    if (!hasInitialized.current) {
-      hasInitialized.current = true;
-    }
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      setSession(s);
+      setAuthChecked(true);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
-    if (hasInitialized.current) {
-      saveBoard(board);
-    }
-  }, [board]);
+    if (!session) return;
 
-  return [board, setBoard];
-}
+    const savedDashboards = localStorage.getItem(`knick-dashboards-${session.user.id}`);
+    const initialDash = [{ id: 'dash-default', name: 'Geral', board: initialBoardData() }];
 
-export default function Home() {
-  const [board, setBoard] = useLocalBoard();
+    let dataToSet = initialDash;
+    let activeId = 'dash-default';
 
-  const onDragEnd = useCallback(
-    (result: DropResult) => {
-      if (!board) return;
-      const { destination, source, draggableId } = result;
-
-      if (!destination) return;
-      if (
-        destination.droppableId === source.droppableId &&
-        destination.index === source.index
-      ) return;
-
-      const sourceColumn = board.columns[source.droppableId];
-      const destColumn = board.columns[destination.droppableId];
-
-      // Mesma coluna
-      if (sourceColumn.id === destColumn.id) {
-        const newTaskIds = Array.from(sourceColumn.taskIds);
-        newTaskIds.splice(source.index, 1);
-        newTaskIds.splice(destination.index, 0, draggableId);
-        setBoard({
-          ...board,
-          columns: {
-            ...board.columns,
-            [sourceColumn.id]: { ...sourceColumn, taskIds: newTaskIds },
-          },
-        });
-        return;
+    if (savedDashboards) {
+      try {
+        const parsed = JSON.parse(savedDashboards) as Dashboard[];
+        if (parsed.length > 0) {
+          dataToSet = parsed;
+          activeId = parsed[0].id;
+        }
+      } catch {
+        dataToSet = initialDash;
       }
+    }
+    
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setDashboards(dataToSet);
+    setActiveTabId(activeId);
+    setIsLoaded(true);
+  }, [session]);
 
-      // Entre colunas diferentes
-      const sourceTaskIds = Array.from(sourceColumn.taskIds);
-      sourceTaskIds.splice(source.index, 1);
-      const destTaskIds = Array.from(destColumn.taskIds);
-      destTaskIds.splice(destination.index, 0, draggableId);
+  useEffect(() => {
+    if (isLoaded && session && dashboards.length > 0) {
+      localStorage.setItem(`knick-dashboards-${session.user.id}`, JSON.stringify(dashboards));
+    }
+  }, [dashboards, isLoaded, session]);
 
-      setBoard({
-        ...board,
-        columns: {
-          ...board.columns,
-          [sourceColumn.id]: { ...sourceColumn, taskIds: sourceTaskIds },
-          [destColumn.id]: { ...destColumn, taskIds: destTaskIds },
-        },
-      });
-    },
-    [board, setBoard]
-  );
+  const updateActiveBoard = useCallback((updatedBoard: BoardState) => {
+    setDashboards(prev => prev.map(d => d.id === activeTabId ? { ...d, board: updatedBoard } : d));
+  }, [activeTabId]);
 
-  const addTask = useCallback(
-    (columnId: string, title: string, description: string) => {
-      if (!board) return;
-      const newTask: Task = {
-        id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        title,
-        description,
-        createdAt: new Date().toISOString(),
-      };
-      const targetColumn = board.columns[columnId];
-      setBoard({
-        ...board,
-        tasks: { ...board.tasks, [newTask.id]: newTask },
-        columns: {
-          ...board.columns,
-          [columnId]: {
-            ...targetColumn,
-            taskIds: [newTask.id, ...targetColumn.taskIds],
-          },
-        },
-      });
-    },
-    [board, setBoard]
-  );
+  const activeDashboard = dashboards.find(d => d.id === activeTabId);
 
-  const deleteTask = useCallback(
-    (columnId: string, taskId: string) => {
-      if (!board) return;
-      const remainingTasks = Object.fromEntries(
-        Object.entries(board.tasks).filter(([id]) => id !== taskId)
-      );
-      const targetColumn = board.columns[columnId];
-      setBoard({
-        ...board,
-        tasks: remainingTasks,
-        columns: {
-          ...board.columns,
-          [columnId]: {
-            ...targetColumn,
-            taskIds: targetColumn.taskIds.filter((id) => id !== taskId),
-          },
-        },
-      });
-    },
-    [board, setBoard]
-  );
+  const handleCreateTab = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTabName.trim()) return;
+
+    const newId = `dash-${crypto.randomUUID()}`;
+    const newDashboard: Dashboard = {
+      id: newId,
+      name: newTabName.trim(),
+      board: { 
+        tasks: {}, 
+        columns: { 
+            'column-todo': { id: 'column-todo', title: 'A Fazer', taskIds: [] }, 
+            'column-in-progress': { id: 'column-in-progress', title: 'Em Andamento', taskIds: [] }, 
+            'column-done': { id: 'column-done', title: 'Concluído', taskIds: [] } 
+        }, 
+        columnOrder: ['column-todo', 'column-in-progress', 'column-done'] 
+      }
+    };
+
+    setDashboards(prev => [...prev, newDashboard]);
+    setActiveTabId(newId);
+    setNewTabName('');
+  };
+
+  const onDragEnd = (result: DropResult) => {
+    if (!activeDashboard) return;
+    const boardData = activeDashboard.board;
+    const { destination, source, draggableId } = result;
+
+    if (!destination || (destination.droppableId === source.droppableId && destination.index === source.index)) return;
+
+    const startColumn = boardData.columns[source.droppableId];
+    const finishColumn = boardData.columns[destination.droppableId];
+
+    if (startColumn === finishColumn) {
+      const newTaskIds = Array.from(startColumn.taskIds);
+      newTaskIds.splice(source.index, 1);
+      newTaskIds.splice(destination.index, 0, draggableId);
+      updateActiveBoard({ ...boardData, columns: { ...boardData.columns, [startColumn.id]: { ...startColumn, taskIds: newTaskIds } } });
+      return;
+    }
+
+    const startTaskIds = Array.from(startColumn.taskIds);
+    startTaskIds.splice(source.index, 1);
+    const finishTaskIds = Array.from(finishColumn.taskIds);
+    finishTaskIds.splice(destination.index, 0, draggableId);
+
+    updateActiveBoard({
+      ...boardData,
+      columns: {
+        ...boardData.columns,
+        [startColumn.id]: { ...startColumn, taskIds: startTaskIds },
+        [finishColumn.id]: { ...finishColumn, taskIds: finishTaskIds }
+      }
+    });
+  };
+
+  const handleAddTask = (columnId: string, title: string, description: string) => {
+    if (!activeDashboard) return;
+    const boardData = activeDashboard.board;
+    
+    const newTask: Task = { 
+      id: `task-${crypto.randomUUID()}`, 
+      title, 
+      description, 
+      createdAt: new Date().toLocaleDateString('pt-BR') 
+    };
+
+    updateActiveBoard({
+      ...boardData,
+      tasks: { ...boardData.tasks, [newTask.id]: newTask },
+      columns: { ...boardData.columns, [columnId]: { ...boardData.columns[columnId], taskIds: [...boardData.columns[columnId].taskIds, newTask.id] } }
+    });
+  };
+
+  const handleDeleteTask = (taskId: string) => {
+    if (!activeDashboard) return;
+    const boardData = activeDashboard.board;
+    const newTasks = { ...boardData.tasks };
+    delete newTasks[taskId];
+
+    const newColumns = { ...boardData.columns };
+    Object.keys(newColumns).forEach(colId => {
+      newColumns[colId].taskIds = newColumns[colId].taskIds.filter(id => id !== taskId);
+    });
+
+    updateActiveBoard({ ...boardData, tasks: newTasks, columns: newColumns });
+  };
+
+  if (!authChecked) return <div className="min-h-screen bg-neutral-950 flex items-center justify-center text-neutral-400">Carregando...</div>;
+  if (!session) return <Auth />;
+  if (!isLoaded || !activeDashboard) return null;
 
   return (
-    <div className="flex min-h-screen flex-col bg-neutral-950">
-      {/* Header */}
-      <header className="sticky top-0 z-10 border-b border-neutral-800 bg-neutral-950/80 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-screen-2xl items-center justify-between px-6 py-4">
+    <main className="min-h-screen bg-neutral-950 text-neutral-100 p-6 md:p-12">
+      <div className="max-w-7xl mx-auto">
+        <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8 border-b border-neutral-900 pb-6">
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500">
-              <LayoutDashboard size={16} className="text-neutral-950" />
-            </div>
+            <div className="p-2.5 bg-blue-600/10 text-blue-500 rounded-xl border border-blue-500/20"><FolderKanban size={24} /></div>
             <div>
-              <h1 className="text-base font-bold tracking-tight text-neutral-100">
-                KanbanLocal
-              </h1>
-              <p className="text-xs text-neutral-500">
-                Dados salvos localmente no navegador
-              </p>
+              <h1 className="text-2xl font-extrabold tracking-tight"><span className="text-blue-500">Knick</span><span className="text-orange-500">.</span></h1>
             </div>
           </div>
-          <div className="hidden sm:flex items-center gap-6 text-xs text-neutral-500">
-            <span>
-              <span className="font-bold text-neutral-300">
-                {Object.keys(board.tasks).length}
-              </span>{" "}
-              tarefas
-            </span>
-            <span>
-              <span className="font-bold text-neutral-300">
-                {board.columnOrder.length}
-              </span>{" "}
-              colunas
-            </span>
-          </div>
-        </div>
-      </header>
+          <button onClick={() => supabase.auth.signOut()} className="text-xs font-semibold px-4 py-2 bg-neutral-900 rounded-xl text-neutral-400 hover:text-red-400 transition-all flex items-center gap-2"><LogOut size={14} /> Sair</button>
+        </header>
 
-      {/* Board */}
-      <main className="flex-1 overflow-x-auto px-6 py-6">
+        <div className="mb-8 flex flex-wrap items-center gap-2 border-b border-neutral-900 pb-2">
+            {dashboards.map((dash) => (
+              <button key={dash.id} onClick={() => setActiveTabId(dash.id)} className={`px-4 py-2 text-xs font-bold rounded-xl border transition-all ${dash.id === activeTabId ? 'bg-blue-600 border-blue-500 text-white' : 'bg-neutral-900 border-neutral-800 text-neutral-400'}`}>
+                {dash.name}
+              </button>
+            ))}
+            <form onSubmit={handleCreateTab} className="flex items-center gap-2 ml-auto">
+              <input type="text" placeholder="Nova aba..." value={newTabName} onChange={(e) => setNewTabName(e.target.value)} className="bg-neutral-900 border border-neutral-800 text-xs text-neutral-200 px-3 py-2 rounded-xl focus:border-orange-500 w-32" />
+              <button type="submit" className="p-2 bg-orange-500 text-white rounded-xl"><Plus size={14} /></button>
+            </form>
+        </div>
+
         <DragDropContext onDragEnd={onDragEnd}>
-          <div className="flex gap-4 items-start">
-            {board.columnOrder.map((columnId) => {
-              const column = board.columns[columnId];
-              const tasks = column.taskIds
-                .map((id) => board.tasks[id])
-                .filter((t): t is Task => t !== undefined);
-              return (
-                <KanbanColumn
-                  key={column.id}
-                  column={column}
-                  tasks={tasks}
-                  onAddTask={addTask}
-                  onDeleteTask={deleteTask}
-                />
-              );
+          <div className="flex flex-col md:flex-row gap-6 items-start overflow-x-auto pb-4">
+            {activeDashboard.board.columnOrder.map((columnId) => {
+              const column = activeDashboard.board.columns[columnId];
+              return column ? (
+                <KanbanColumn key={column.id} column={column} tasks={column.taskIds.map(id => activeDashboard.board.tasks[id]).filter(Boolean)} onAddTask={handleAddTask} onDeleteTask={handleDeleteTask} />
+              ) : null;
             })}
           </div>
         </DragDropContext>
-      </main>
-
-      {/* Footer */}
-      <footer className="border-t border-neutral-800 px-6 py-3">
-        <p className="text-center text-xs text-neutral-700">
-          Arraste os cards entre colunas · Hover para excluir · Dados persistidos no localStorage
-        </p>
-      </footer>
-    </div>
+      </div>
+    </main>
   );
 }
